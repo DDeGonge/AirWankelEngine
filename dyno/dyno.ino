@@ -1,7 +1,7 @@
 #include <HX711_ADC.h>
 
-#define encoderPinA 0 //RXD0 PB16
-#define encoderPinB 1 //TXD0 PB17
+//#define switchPin 0 //RXD0 PB16
+#define switchPin 6 // Feather M4 Pin 6
 
 #define HX711_dout 12 //mcu > HX711 dout pin
 #define HX711_sck 13 //mcu > HX711 sck pin
@@ -9,18 +9,17 @@
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
 static float calibrationValue = -1883854.87;
 static float arm_len_m = 0.05;
-static float ticks_per_rev = 2400;
+static float ticks_per_rev = 6; // vanes * 2 for jank fake encoder
 static float g_accel = 9.81;
+static float power_lpf = 5.0;  // low pass filter output power, for making plot look cleaner only
 static int readrate_hz = 25;
 
 volatile long encoderTicks = 0;
 
 void setup() {
   //encoder IO setup
-  pinMode(encoderPinA, INPUT_PULLUP);
-  pinMode(encoderPinB, INPUT_PULLUP);
-  attachInterrupt(encoderPinA, handleA, CHANGE);
-  attachInterrupt(encoderPinB, handleB, CHANGE);
+  pinMode(switchPin, INPUT);
+  attachInterrupt(switchPin, handle, CHANGE);
 
   Serial.begin(115200);
   while (!Serial);
@@ -44,6 +43,8 @@ void loop() {
   long last_encoderTicks = 0;
   long readInc_us = 1000000 / readrate_hz;
   long lastRead_us = micros();
+  float lpf_mult = power_lpf / readrate_hz;
+  float power_W_display = 0;
 
   // Flush out any invalid reads
   for(uint8_t i = 0; i < 10; i++)
@@ -67,11 +68,14 @@ void loop() {
     power_hp = power_W / 745.7;
     work_Wh += (power_W * time_elapsed_s) / (3600);
 
+    // Update filtered power
+    power_W_display += (power_W - power_W_display) * lpf_mult;
+
     // print results
     Serial.print("torque_mNm:");
     Serial.print(load_mNm);
     Serial.print("\tpower_mW:");
-    Serial.print(power_W * 1000);
+    Serial.print(power_W_display * 1000);
 //    Serial.print("\tpower_hp:");
 //    Serial.print(power_hp);
     Serial.print("\twork_milliWatt/hr:");
@@ -87,34 +91,7 @@ void loop() {
 }
 
 /* EXTERNAL INTERRUPT PROTOCOLS */
-void handleA()
+void handle()
 {
-  bool aState = 0, bState = 0; //sets states low as default
-  uint32_t readval = PORT->Group[PORTB].IN.reg; //reads portA
-  
-  if (readval & (1<<16)) //if register for pin A is high, make aState high
-    aState = 1;
-  if (readval & (1<<17)) //same for B
-    bState = 1;
-    
-  if ((!bState && aState) || (bState && !aState)) //increment or decrement encoder count appropriately
-    encoderTicks++;
-  else
-    encoderTicks--;
-}
-
-void handleB()
-{
-  bool aState = 0, bState = 0;
-  uint32_t readval = PORT->Group[PORTB].IN.reg;
-  
-  if (readval & (1<<16))
-    aState = 1;
-  if (readval & (1<<17))
-    bState = 1;
-    
-  if ((!bState && !aState) || (bState && aState))
-    encoderTicks++;
-  else
-    encoderTicks--;
+  encoderTicks += 1;
 }
